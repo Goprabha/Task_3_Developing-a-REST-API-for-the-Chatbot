@@ -1,0 +1,110 @@
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.*;
+import java.io.*;
+import java.lang.reflect.Type;
+import java.sql.*;
+import java.util.*;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        // Jetty server on port 8080
+        Server server = new Server(8080);
+
+        ServletContextHandler handler = new ServletContextHandler(ServletContextHandler.SESSIONS);
+        handler.addServlet(new ServletHolder(new BookingServlet()), "/addBooking");
+        handler.addServlet(new ServletHolder(new BookingServlet()), "/viewBookings");
+
+        server.setHandler(handler);
+        server.start();
+        System.out.println("Server running at http://localhost:8080/");
+        server.join();
+    }
+
+    public static class BookingServlet extends HttpServlet {
+        private static final Gson gson = new Gson();
+
+        // Update these DB settings as per your setup
+        private static final String JDBC_URL = "jdbc:mysql://localhost:3306/chatbotdb";
+        private static final String DB_USER = "root";
+        private static final String DB_PASS = "yourpassword";
+
+        @Override
+        protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+            // Handle POST /addBooking to add new booking
+
+            resp.setContentType("application/json");
+            try (Connection conn = DriverManager.getConnection(JDBC_URL, DB_USER, DB_PASS)) {
+                BufferedReader reader = req.getReader();
+                Booking booking = gson.fromJson(reader, Booking.class);
+
+                String sql = "INSERT INTO bookings (name, booking_date, status) VALUES (?, ?, ?)";
+                PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
+                stmt.setString(1, booking.name);
+                stmt.setDate(2, Date.valueOf(booking.booking_date));
+                stmt.setString(3, booking.status);
+
+                int affectedRows = stmt.executeUpdate();
+                if (affectedRows == 0) {
+                    resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                    resp.getWriter().write("{\"error\":\"Failed to add booking\"}");
+                    return;
+                }
+
+                try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        booking.id = generatedKeys.getInt(1);
+                    }
+                }
+
+                resp.setStatus(HttpServletResponse.SC_OK);
+                resp.getWriter().write(gson.toJson(Map.of("message", "Booking added successfully", "booking", booking)));
+
+            } catch (SQLException e) {
+                resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                resp.getWriter().write("{\"error\":\"" + e.getMessage() + "\"}");
+            }
+        }
+
+        @Override
+        protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+            // Handle GET /viewBookings to fetch all bookings
+
+            resp.setContentType("application/json");
+            try (Connection conn = DriverManager.getConnection(JDBC_URL, DB_USER, DB_PASS)) {
+                Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery("SELECT * FROM bookings");
+
+                List<Booking> bookings = new ArrayList<>();
+                while (rs.next()) {
+                    Booking b = new Booking();
+                    b.id = rs.getInt("id");
+                    b.name = rs.getString("name");
+                    b.booking_date = rs.getDate("booking_date").toString();
+                    b.status = rs.getString("status");
+                    bookings.add(b);
+                }
+
+                resp.setStatus(HttpServletResponse.SC_OK);
+                resp.getWriter().write(gson.toJson(bookings));
+
+            } catch (SQLException e) {
+                resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                resp.getWriter().write("{\"error\":\"" + e.getMessage() + "\"}");
+            }
+        }
+
+        // Booking data class
+        static class Booking {
+            Integer id;
+            String name;
+            String booking_date; // yyyy-mm-dd
+            String status;
+        }
+    }
+}
